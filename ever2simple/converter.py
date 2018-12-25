@@ -1,6 +1,8 @@
 import json
 import os
 import sys
+import yaml
+import re
 from csv import DictWriter
 from cStringIO import StringIO
 from dateutil.parser import parse
@@ -41,6 +43,7 @@ class EverConverter(object):
         for note in raw_notes:
             note_dict = {}
             title = note.xpath('title')[0].text
+            note_dict['title'] = title
             # Use dateutil to figure out these dates
             # 20110610T182917Z
             created_string = parse('19700101T000017Z')
@@ -49,8 +52,8 @@ class EverConverter(object):
             updated_string = created_string
             if note.xpath('updated'):
                 updated_string = parse(note.xpath('updated')[0].text)
-            note_dict['createdate'] = created_string.strftime(self.date_fmt)
-            note_dict['modifydate'] = updated_string.strftime(self.date_fmt)
+            note_dict['createdate'] = created_string
+            note_dict['modifydate'] = updated_string
             tags = [tag.text for tag in note.xpath('tag')]
             if self.fmt == 'csv':
                 tags = " ".join(tags)
@@ -84,6 +87,8 @@ class EverConverter(object):
             self._convert_json(notes)
         if self.fmt == 'dir':
             self._convert_dir(notes)
+        if self.fmt == 'vsnotes':
+            self._convert_vsnotes(notes)
 
     def _convert_html_markdown(self, title, text):
         html2plain = HTML2Text(None, "")
@@ -111,6 +116,31 @@ class EverConverter(object):
             with open(self.simple_filename, 'w') as output_file:
                 json.dump(notes, output_file)
 
+    def _convert_vsnotes(self, notes):
+        if os.path.exists(self.simple_filename) and not os.path.isdir(self.simple_filename):
+            print '"%s" exists but is not a directory. %s' % self.simple_filename
+            sys.exit(1)
+        elif not os.path.exists(self.simple_filename):
+            os.makedirs(self.simple_filename)
+
+        for note in notes:
+            createdate = note['createdate']
+            base = '{dt}_{title}'.format(
+                dt=note['createdate'].strftime('%Y-%m-%d_%H-%M'),
+                title=self._format_title(note['title'])
+            )
+            fullpath = self._unique_path(base)
+
+            with open(fullpath, 'w') as f:
+                f.write('---\n')
+                yaml.dump(
+                    {'tags': note['tags']},
+                    stream=f,
+                    default_flow_style=False
+                )
+                f.write('---\n\n')
+                f.write(note['content'].encode(encoding='utf-8'))
+
     def _convert_dir(self, notes):
         if self.simple_filename is None:
             sys.stdout.write(json.dumps(notes))
@@ -124,3 +154,18 @@ class EverConverter(object):
                 output_file_path = os.path.join(self.simple_filename, str(i) + '.txt')
                 with open(output_file_path, 'w') as output_file:
                     output_file.write(note['content'].encode(encoding='utf-8'))
+
+    def _format_title(self, title):
+        return re.sub('[^a-zA-Z0-9]+', '_', title).lower()
+
+    def _unique_path(self, base):
+        i = 1
+        while True:
+            filename = base + '.md'
+            fullpath = os.path.join(self.simple_filename, filename)
+            if not os.path.exists(fullpath):
+                return fullpath
+
+            i += 1
+            base = '{}_{}'.format(base, i)
+
